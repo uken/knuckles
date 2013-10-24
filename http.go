@@ -327,5 +327,5 @@ func lastSep(k string) string {
 }
 
 func requestStart() string {
-	return strconv.FormatInt(time.Now().UTC().UnixNano()/1e6, 10)
+	return strconv.FormatInt(time.Now().UnixNano()/int64(time.Millisecond), 10)
 }
