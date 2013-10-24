@@ -19,33 +19,32 @@ type HTTPStats struct {
 }
 
 type HTTPProxy struct {
-	mtx            sync.RWMutex
-	etcClient      *etcd.Client
-	configVersion  uint64
-	EtcEndpoint    []string
-	EtcKeyspace    string
-	HostMap        map[string]*Frontend
-	Frontends      []*Frontend
-	quitChan       chan bool
-	SSL            bool
-	SSLCertificate string
-	Server         http.Server
+	mtx           sync.RWMutex
+	etcClient     *etcd.Client
+	configVersion uint64
+	HostMap       map[string]*Frontend
+	Frontends     []*Frontend
+	quitChan      chan bool
+	Server        http.Server
+	Settings      HTTPProxySettings
 }
 
 type HTTPProxySettings struct {
-	EtcEndpoint    []string
-	EtcKeyspace    string
-	SSLCertificate string
-	Endpoint       string
+	EtcEndpoint            []string
+	EtcKeyspace            string
+	Endpoint               string
+	CheckInterval          time.Duration
+	SSL                    bool
+	RedirectOnHostnameMiss string
+	RedirectOnBackendMiss  string
+	RedirectOnError        string
 }
 
 func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 	proxy := new(HTTPProxy)
 	proxy.HostMap = make(map[string]*Frontend)
 	proxy.Frontends = make([]*Frontend, 0)
-	proxy.EtcEndpoint = settings.EtcEndpoint
-	proxy.EtcKeyspace = settings.EtcKeyspace
-
+	proxy.Settings = settings
 	proxy.Server.Addr = settings.Endpoint
 	mux := http.NewServeMux()
 	mux.Handle("/", proxy)
@@ -56,7 +55,7 @@ func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 	proxy.quitChan = make(chan bool)
 	ok := proxy.Reload()
 	if !ok {
-		return nil, fmt.Errorf("Failed to load initial configuration")
+		return nil, fmt.Errorf("Failed to load initial configuration from etcd")
 	}
 	return proxy, nil
 }
@@ -67,12 +66,9 @@ func (self *HTTPProxy) Start() {
 	ch := make(chan *etcd.Response)
 	stop := make(chan bool)
 
-	if self.SSL {
-	} else {
-		go self.Server.ListenAndServe()
-	}
+	go self.Server.ListenAndServe()
 
-	go self.etcClient.Watch(self.EtcKeyspace, self.configVersion+1, ch, stop)
+	go self.etcClient.Watch(self.Settings.EtcKeyspace, self.configVersion+1, ch, stop)
 
 	for run {
 		select {
@@ -99,7 +95,7 @@ func (self *HTTPProxy) Stop() {
 }
 
 func (self *HTTPProxy) etcGet(key string) ([]*etcd.Response, error) {
-	return self.etcClient.Get(fmt.Sprintf("%s/%s", self.EtcKeyspace, key))
+	return self.etcClient.Get(fmt.Sprintf("%s/%s", self.Settings.EtcKeyspace, key))
 }
 
 func (self *HTTPProxy) loadHosts(appKey string, frontend *Frontend, newHostMap map[string]*Frontend) error {
@@ -132,7 +128,7 @@ func (self *HTTPProxy) loadBackends(appKey string, frontend *Frontend) error {
 
 		settings := BackendSettings{
 			Endpoint:      endpoint,
-			CheckInterval: 5 * time.Second,
+			CheckInterval: self.Settings.CheckInterval,
 			Updates:       frontend.NotifyChan,
 			CheckUrl:      fmt.Sprintf("http://%s", endpoint),
 		}
@@ -214,24 +210,27 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	frontend, ok := self.HostMap[r.Host]
 	if !ok {
-		http.NotFound(w, r)
+		http.Redirect(w, r, self.Settings.RedirectOnHostnameMiss, http.StatusTemporaryRedirect)
 		return
 	}
 
 	backend, err := frontend.PickBackend()
 
 	if err != nil {
-		http.Error(w, "No backends available", http.StatusInternalServerError)
+		http.Redirect(w, r, self.Settings.RedirectOnBackendMiss, http.StatusTemporaryRedirect)
 		return
 	}
 
-	r.Header.Set("X-Forwarded-For", r.RemoteAddr)
 	r.Header.Set("X-Request-Start", requestStart())
 
 	proto := "http"
-	if self.SSL {
+	if self.Settings.SSL {
 		proto = "https"
+		//stunnel already adds X-Forwarded-For
+	} else {
+		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
 	}
+
 	r.Header.Set("X-Forwarded-Proto", proto)
 
 	r.URL.Host = backend.Endpoint
@@ -250,7 +249,7 @@ func (self *HTTPProxy) simpleProxy(w http.ResponseWriter, r *http.Request) {
 	resp, err := http.DefaultTransport.RoundTrip(r)
 
 	if err != nil {
-		http.Error(w, "Failed to connect to backend", http.StatusBadGateway)
+		http.Redirect(w, r, self.Settings.RedirectOnError, http.StatusTemporaryRedirect)
 		log.Println(err)
 		return
 	}
@@ -270,20 +269,20 @@ func (self *HTTPProxy) upgradeConnection(w http.ResponseWriter, r *http.Request)
 	hj, ok := w.(http.Hijacker)
 
 	if !ok {
-		http.Error(w, "Failed to upgrade", http.StatusInternalServerError)
+		http.Redirect(w, r, self.Settings.RedirectOnError, http.StatusTemporaryRedirect)
 		return
 	}
 
 	client, _, err := hj.Hijack()
 	if err != nil {
-		http.Error(w, "Failed to acquire socket", http.StatusBadGateway)
+		http.Redirect(w, r, self.Settings.RedirectOnError, http.StatusTemporaryRedirect)
 		client.Close()
 		return
 	}
 
 	server, err := net.Dial("tcp", r.URL.Host)
 	if err != nil {
-		http.Error(w, "couldn't connect to backend server", http.StatusBadGateway)
+		http.Redirect(w, r, self.Settings.RedirectOnError, http.StatusTemporaryRedirect)
 		client.Close()
 		return
 	}
