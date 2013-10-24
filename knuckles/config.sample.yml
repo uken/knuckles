@@ -1,0 +1,17 @@
+http:
+  stunnel: true
+  address: :8080
+  check_interval: 5000
+  redirect:
+    no_hostname: http://thebest404pageever.com/
+    no_backend: http://404.jodi.org/
+    error: http://500.chromeexperiments.com/
+
+etcd:
+  keyspace: /knuckles
+  hosts:
+    - http://localhost:4001
+
+statsd:
+  endpoint: localhost:8125
+  prefix: knuckles.

@@ -1,7 +1,7 @@
 all:
 	cd .. && go install
 	go build
-	./knuckles
+	./knuckles -config=./config.sample.yml
 
 clean:
 	go clean
