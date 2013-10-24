@@ -2,6 +2,7 @@ package knuckles
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -74,8 +75,18 @@ func (self *Backend) Stop() {
 func (self *Backend) CheckHealth() {
 	current := self.Alive
 
-	resp, err := http.Get(self.CheckURL.String())
+	client := &http.Client{}
+
+	req, _ := http.NewRequest("GET", self.CheckURL.String(), nil)
+	req.Close = true
+
+	resp, err := client.Do(req)
+	if err == nil {
+		defer resp.Body.Close()
+	}
+
 	if err != nil || (resp.StatusCode >= 400) {
+		log.Println(self.Name, " going down. Error: ", err)
 		self.Alive = false
 	} else {
 		self.Alive = true
