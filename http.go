@@ -208,7 +208,13 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	self.mtx.RLock()
 	defer self.mtx.RUnlock()
 
-	frontend, ok := self.HostMap[r.Host]
+	hostname := r.Host
+
+	if sep := strings.Index(hostname, ":"); sep >= 0 {
+		hostname = hostname[:sep]
+	}
+
+	frontend, ok := self.HostMap[hostname]
 	if !ok {
 		http.Redirect(w, r, self.Settings.RedirectOnHostnameMiss, http.StatusTemporaryRedirect)
 		return
