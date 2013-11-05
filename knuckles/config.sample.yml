@@ -13,5 +13,5 @@ etcd:
     - http://localhost:4001
 
 statsd:
-  endpoint: localhost:8125
-  prefix: knuckles.
+  address: localhost:8125
+  prefix: knuckles.http.

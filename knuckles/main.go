@@ -36,6 +36,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	if settings.StatusEndpoint, err = config.Get("statsd.address"); err != nil {
+		log.Println(err)
+		os.Exit(1)
+	}
+
+	if settings.StatusPrefix, err = config.Get("statsd.prefix"); err != nil {
+		log.Println(err)
+		os.Exit(1)
+	}
+
 	if settings.RedirectOnError, err = config.Get("http.redirect.error"); err != nil {
 		log.Println(err)
 		os.Exit(1)
