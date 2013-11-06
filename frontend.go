@@ -86,3 +86,13 @@ func (self *Frontend) AddBackend(backend *Backend) error {
 	go backend.Start()
 	return nil
 }
+
+func (self *Frontend) BackendStatus(name string) bool {
+
+	be, ok := self.Backends[name]
+	if ok {
+		return be.Alive
+	}
+
+	return false
+}

@@ -13,11 +13,6 @@ import (
 	"time"
 )
 
-// stats for individual frontends and backends
-// flushed at interval N
-type HTTPStats struct {
-}
-
 type HTTPProxy struct {
 	mtx           sync.RWMutex
 	etcClient     *etcd.Client
@@ -27,12 +22,16 @@ type HTTPProxy struct {
 	quitChan      chan bool
 	Server        http.Server
 	Settings      HTTPProxySettings
+	HttpStatus    http.Server
+	status        *HTTPStats
 }
 
 type HTTPProxySettings struct {
 	EtcEndpoint            []string
 	EtcKeyspace            string
 	Endpoint               string
+	StatusEndpoint         string
+	StatusPrefix           string
 	CheckInterval          time.Duration
 	SSL                    bool
 	RedirectOnHostnameMiss string
@@ -41,6 +40,8 @@ type HTTPProxySettings struct {
 }
 
 func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
+	var err error
+
 	proxy := new(HTTPProxy)
 	proxy.HostMap = make(map[string]*Frontend)
 	proxy.Frontends = make([]*Frontend, 0)
@@ -49,6 +50,11 @@ func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 	mux := http.NewServeMux()
 	mux.Handle("/", proxy)
 	proxy.Server.Handler = mux
+
+	proxy.status, err = NewHTTPStats(settings.StatusEndpoint, settings.StatusPrefix)
+	if err != nil {
+		return nil, err
+	}
 
 	proxy.etcClient = etcd.NewClient(settings.EtcEndpoint)
 	proxy.etcClient.SyncCluster()
@@ -67,6 +73,7 @@ func (self *HTTPProxy) Start() {
 	stop := make(chan bool)
 
 	go self.Server.ListenAndServe()
+	go self.status.Start()
 
 	go self.etcClient.Watch(self.Settings.EtcKeyspace, self.configVersion+1, ch, stop)
 
@@ -91,6 +98,7 @@ func (self *HTTPProxy) Stop() {
 	for _, f := range self.HostMap {
 		f.Stop()
 	}
+	self.status.Stop()
 	close(self.quitChan)
 }
 
@@ -200,6 +208,7 @@ func (self *HTTPProxy) Reload() bool {
 	}
 
 	log.Println("Load Complete")
+	self.status.Increment(MetricReload)
 
 	return true
 }
@@ -207,6 +216,8 @@ func (self *HTTPProxy) Reload() bool {
 func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	self.mtx.RLock()
 	defer self.mtx.RUnlock()
+
+	self.status.Increment(MetricRequest)
 
 	hostname := r.Host
 
@@ -216,6 +227,7 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	frontend, ok := self.HostMap[hostname]
 	if !ok {
+		self.status.Increment(MetricNoHostname)
 		http.Redirect(w, r, self.Settings.RedirectOnHostnameMiss, http.StatusTemporaryRedirect)
 		return
 	}
@@ -223,6 +235,7 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	backend, err := frontend.PickBackend()
 
 	if err != nil {
+		self.status.Increment(MetricNoBackend)
 		http.Redirect(w, r, self.Settings.RedirectOnBackendMiss, http.StatusTemporaryRedirect)
 		return
 	}
@@ -246,18 +259,20 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.ToLower(connection) == "upgrade" {
 		self.upgradeConnection(w, r)
 	} else {
-		self.simpleProxy(w, r)
+		respStatus := self.simpleProxy(w, r)
+		self.status.IncrementBackend(frontend.Name, backend.Name, respStatus)
 	}
 
 }
 
-func (self *HTTPProxy) simpleProxy(w http.ResponseWriter, r *http.Request) {
+func (self *HTTPProxy) simpleProxy(w http.ResponseWriter, r *http.Request) int {
 	resp, err := http.DefaultTransport.RoundTrip(r)
 
 	if err != nil {
+		self.status.Increment(MetricError)
 		http.Redirect(w, r, self.Settings.RedirectOnError, http.StatusTemporaryRedirect)
 		log.Println(err)
-		return
+		return http.StatusTemporaryRedirect
 	}
 	defer resp.Body.Close()
 
@@ -269,18 +284,21 @@ func (self *HTTPProxy) simpleProxy(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+	return resp.StatusCode
 }
 
 func (self *HTTPProxy) upgradeConnection(w http.ResponseWriter, r *http.Request) {
 	hj, ok := w.(http.Hijacker)
 
 	if !ok {
+		self.status.Increment(MetricError)
 		http.Redirect(w, r, self.Settings.RedirectOnError, http.StatusTemporaryRedirect)
 		return
 	}
 
 	client, _, err := hj.Hijack()
 	if err != nil {
+		self.status.Increment(MetricError)
 		http.Redirect(w, r, self.Settings.RedirectOnError, http.StatusTemporaryRedirect)
 		client.Close()
 		return
@@ -288,6 +306,7 @@ func (self *HTTPProxy) upgradeConnection(w http.ResponseWriter, r *http.Request)
 
 	server, err := net.Dial("tcp", r.URL.Host)
 	if err != nil {
+		self.status.Increment(MetricError)
 		http.Redirect(w, r, self.Settings.RedirectOnError, http.StatusTemporaryRedirect)
 		client.Close()
 		return
@@ -295,6 +314,7 @@ func (self *HTTPProxy) upgradeConnection(w http.ResponseWriter, r *http.Request)
 
 	err = r.Write(server)
 	if err != nil {
+		self.status.Increment(MetricError)
 		log.Printf("writing WebSocket request to backend server failed: %v", err)
 		server.Close()
 		client.Close()
