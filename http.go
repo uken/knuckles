@@ -2,7 +2,7 @@ package knuckles
 
 import (
 	"fmt"
-	etcd "github.com/coreos/go-etcd/etcd"
+	etcd "github.com/lxfontes/go-etcd/etcd"
 	"io"
 	"log"
 	"net"
@@ -24,6 +24,7 @@ type HTTPProxy struct {
 	Settings      HTTPProxySettings
 	HttpStatus    http.Server
 	status        *HTTPStats
+	running       bool
 }
 
 type HTTPProxySettings struct {
@@ -67,7 +68,7 @@ func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 }
 
 func (self *HTTPProxy) Start() {
-	run := true
+	self.running = true
 
 	ch := make(chan *etcd.Response)
 	stop := make(chan bool)
@@ -75,13 +76,13 @@ func (self *HTTPProxy) Start() {
 	go self.Server.ListenAndServe()
 	go self.status.Start()
 
-	go self.etcClient.Watch(self.Settings.EtcKeyspace, self.configVersion+1, ch, stop)
+	go self.Watch(ch, stop)
 
-	for run {
+	for self.running {
 		select {
 		case <-self.quitChan:
+			self.running = false
 			stop <- true
-			run = false
 		case resp := <-ch:
 			// don't reload in case of TTL updates
 			if resp.PrevValue != resp.Value {
@@ -90,6 +91,18 @@ func (self *HTTPProxy) Start() {
 		}
 	}
 	self.quitChan <- true
+}
+
+// also step locked to main thread
+func (self *HTTPProxy) Watch(ch chan *etcd.Response, stop chan bool) {
+	for self.running {
+		_, err := self.etcClient.WatchAll(self.Settings.EtcKeyspace, self.configVersion+1, ch, stop)
+		if err != nil {
+			log.Println("EtcD error: ", err)
+			time.Sleep(1 * time.Second)
+			log.Println("Restarting watcher")
+		}
+	}
 }
 
 func (self *HTTPProxy) Stop() {
@@ -102,17 +115,17 @@ func (self *HTTPProxy) Stop() {
 	close(self.quitChan)
 }
 
-func (self *HTTPProxy) etcGet(key string) ([]*etcd.Response, error) {
-	return self.etcClient.Get(fmt.Sprintf("%s/%s", self.Settings.EtcKeyspace, key))
+func (self *HTTPProxy) etcGet(key string) (*etcd.Response, error) {
+	return self.etcClient.Get(fmt.Sprintf("%s/%s", self.Settings.EtcKeyspace, key), false)
 }
 
 func (self *HTTPProxy) loadHosts(appKey string, frontend *Frontend, newHostMap map[string]*Frontend) error {
 	hostList, err := self.etcGet(fmt.Sprintf("%s/hostnames", appKey))
-	if err != nil || len(hostList) < 1 {
+	if err != nil || len(hostList.Kvs) < 1 {
 		return fmt.Errorf("No hostnames")
 	}
 
-	for _, hostEntry := range hostList {
+	for _, hostEntry := range hostList.Kvs {
 		hostKey := lastSep(hostEntry.Key)
 		_, present := newHostMap[hostKey]
 		if present {
@@ -126,11 +139,11 @@ func (self *HTTPProxy) loadHosts(appKey string, frontend *Frontend, newHostMap m
 
 func (self *HTTPProxy) loadBackends(appKey string, frontend *Frontend) error {
 	backendList, err := self.etcGet(fmt.Sprintf("%s/backends", appKey))
-	if err != nil || len(backendList) < 1 {
+	if err != nil || len(backendList.Kvs) < 1 {
 		return fmt.Errorf("No backends")
 	}
 
-	for _, backendEntry := range backendList {
+	for _, backendEntry := range backendList.Kvs {
 		beKey := lastSep(backendEntry.Key)
 		endpoint := backendEntry.Value
 
@@ -165,8 +178,8 @@ func (self *HTTPProxy) Reload() bool {
 	newHostMap := make(map[string]*Frontend)
 	newFrontends := make([]*Frontend, 0)
 
-	for _, app := range appList {
-		configIndex = app.Index
+	for _, app := range appList.Kvs {
+		configIndex = appList.Index
 		appKey := lastSep(app.Key)
 		log.Println("Loading app ", appKey)
 
@@ -196,7 +209,6 @@ func (self *HTTPProxy) Reload() bool {
 	self.mtx.Lock()
 	oldFrontends := self.Frontends
 	self.Frontends = newFrontends
-	//oldHostMap := self.HostMap
 	self.HostMap = newHostMap
 	self.configVersion = configIndex
 	self.mtx.Unlock()
