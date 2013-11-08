@@ -61,7 +61,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if settings.EtcKeyspace, err = config.Get("etcd.keyspace"); err != nil {
+	if settings.DiscKeyspace, err = config.Get("redis.keyspace"); err != nil {
 		log.Println(err)
 		os.Exit(1)
 	}
@@ -84,26 +84,26 @@ func main() {
 		}
 	}
 
-	etcdHostCount, err := config.Count("etcd.hosts")
-	if err != nil || etcdHostCount < 1 {
-		log.Println("Missing etcd hosts")
+	discHostCount, err := config.Count("redis.hosts")
+	if err != nil || discHostCount < 1 {
+		log.Println("Missing redis hosts")
 		os.Exit(1)
 	}
 
-	log.Println("Adding ", etcdHostCount, " etcd hosts")
-	settings.EtcEndpoint = []string{}
-	for i := 0; i < etcdHostCount; i++ {
-		k := fmt.Sprintf("etcd.hosts[%d]", i)
+	log.Println("Adding ", discHostCount, " redis hosts")
+	settings.DiscEndpoint = []string{}
+	for i := 0; i < discHostCount; i++ {
+		k := fmt.Sprintf("redis.hosts[%d]", i)
 		if addr, err := config.Get(k); err != nil {
 			log.Println(err)
 			os.Exit(1)
 			return
 		} else {
-			settings.EtcEndpoint = append(settings.EtcEndpoint, addr)
+			settings.DiscEndpoint = append(settings.DiscEndpoint, addr)
 		}
 	}
 
-	log.Println(settings.EtcEndpoint)
+	log.Println(settings.DiscEndpoint)
 	proxy, err = knuckles.NewHTTPProxy(settings)
 
 	if err != nil {

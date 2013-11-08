@@ -1,4 +1,7 @@
 #!/bin/sh
 APP=$1
 HOSTNAME=$2
-curl -L http://127.0.0.1:4001/v1/keys/knuckles/${APP}/hostnames/${HOSTNAME} -d value=x
+
+redis-cli sadd knuckles:applications ${APP}
+redis-cli sadd knuckles:${APP}:hostnames ${HOSTNAME}
+redis-cli publish knuckles:reload 1

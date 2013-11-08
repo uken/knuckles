@@ -1,5 +1,5 @@
 http:
-  stunnel: true
+  stunnel: false
   address: :8080
   check_interval: 5000
   redirect:
@@ -7,10 +7,12 @@ http:
     no_backend: http://404.jodi.org/
     error: http://500.chromeexperiments.com/
 
-etcd:
-  keyspace: /knuckles
+redis:
+  keyspace: knuckles
   hosts:
-    - http://localhost:4001
+    - localhost:6379
+    - localhost:6379
+    - localhost:6379
 
 statsd:
   address: localhost:8125

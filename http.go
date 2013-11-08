@@ -2,7 +2,7 @@ package knuckles
 
 import (
 	"fmt"
-	etcd "github.com/lxfontes/go-etcd/etcd"
+	"github.com/fiorix/go-redis/redis"
 	"io"
 	"log"
 	"net"
@@ -14,22 +14,21 @@ import (
 )
 
 type HTTPProxy struct {
-	mtx           sync.RWMutex
-	etcClient     *etcd.Client
-	configVersion uint64
-	HostMap       map[string]*Frontend
-	Frontends     []*Frontend
-	quitChan      chan bool
-	Server        http.Server
-	Settings      HTTPProxySettings
-	HttpStatus    http.Server
-	status        *HTTPStats
-	running       bool
+	mtx         sync.RWMutex
+	redisClient *redis.Client
+	HostMap     map[string]*Frontend
+	Frontends   []*Frontend
+	quitChan    chan bool
+	Server      http.Server
+	Settings    HTTPProxySettings
+	HttpStatus  http.Server
+	status      *HTTPStats
+	running     bool
 }
 
 type HTTPProxySettings struct {
-	EtcEndpoint            []string
-	EtcKeyspace            string
+	DiscEndpoint           []string
+	DiscKeyspace           string
 	Endpoint               string
 	StatusEndpoint         string
 	StatusPrefix           string
@@ -57,12 +56,13 @@ func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 		return nil, err
 	}
 
-	proxy.etcClient = etcd.NewClient(settings.EtcEndpoint)
-	proxy.etcClient.SyncCluster()
+	proxy.redisClient = redis.New(settings.DiscEndpoint...)
+
 	proxy.quitChan = make(chan bool)
+
 	ok := proxy.Reload()
 	if !ok {
-		return nil, fmt.Errorf("Failed to load initial configuration from etcd")
+		return nil, fmt.Errorf("Failed to load initial configuration from discovery engine")
 	}
 	return proxy, nil
 }
@@ -70,7 +70,7 @@ func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 func (self *HTTPProxy) Start() {
 	self.running = true
 
-	ch := make(chan *etcd.Response)
+	ch := make(chan redis.PubSubMessage)
 	stop := make(chan bool)
 
 	go self.Server.ListenAndServe()
@@ -84,8 +84,8 @@ func (self *HTTPProxy) Start() {
 			self.running = false
 			stop <- true
 		case resp := <-ch:
-			// don't reload in case of TTL updates
-			if resp.PrevValue != resp.Value {
+			// only reload on legitimate notifications
+			if resp.Error == nil {
 				self.Reload()
 			}
 		}
@@ -94,14 +94,30 @@ func (self *HTTPProxy) Start() {
 }
 
 // also step locked to main thread
-func (self *HTTPProxy) Watch(ch chan *etcd.Response, stop chan bool) {
+func (self *HTTPProxy) Watch(callerCh chan redis.PubSubMessage, stop chan bool) {
+	ch := make(chan redis.PubSubMessage)
+	channel := fmt.Sprintf("%s:reload", self.Settings.DiscKeyspace)
+
 	for self.running {
-		_, err := self.etcClient.WatchAll(self.Settings.EtcKeyspace, self.configVersion+1, ch, stop)
+		err := self.redisClient.Subscribe(channel, ch, stop)
+
 		if err != nil {
-			log.Println("EtcD error: ", err)
+			log.Println("Discovery error ", err)
 			time.Sleep(1 * time.Second)
-			log.Println("Restarting watcher")
+			continue
 		}
+
+		for {
+			resp := <-ch
+			if resp.Error != nil {
+				log.Println(resp.Error)
+				log.Println("Discovery notification error ", err)
+				break
+			} else {
+				callerCh <- resp
+			}
+		}
+
 	}
 }
 
@@ -115,18 +131,30 @@ func (self *HTTPProxy) Stop() {
 	close(self.quitChan)
 }
 
-func (self *HTTPProxy) etcGet(key string) (*etcd.Response, error) {
-	return self.etcClient.Get(fmt.Sprintf("%s/%s", self.Settings.EtcKeyspace, key), false)
+func (self *HTTPProxy) keySpaced(key string) string {
+	return fmt.Sprintf("%s:%s", self.Settings.DiscKeyspace, key)
+}
+
+func (self *HTTPProxy) discGet(key string) (string, error) {
+	return self.redisClient.Get(self.keySpaced(key))
+}
+
+func (self *HTTPProxy) discList(key string) ([]string, error) {
+	return self.redisClient.SMembers(self.keySpaced(key))
+}
+
+func (self *HTTPProxy) discFind(key string) ([]string, error) {
+	return self.redisClient.Keys(fmt.Sprintf("%s:*", self.keySpaced(key)))
 }
 
 func (self *HTTPProxy) loadHosts(appKey string, frontend *Frontend, newHostMap map[string]*Frontend) error {
-	hostList, err := self.etcGet(fmt.Sprintf("%s/hostnames", appKey))
-	if err != nil || len(hostList.Kvs) < 1 {
+	hostList, err := self.discList(fmt.Sprintf("%s:hostnames", appKey))
+	if err != nil || len(hostList) < 1 {
 		return fmt.Errorf("No hostnames")
 	}
 
-	for _, hostEntry := range hostList.Kvs {
-		hostKey := lastSep(hostEntry.Key)
+	for _, hostEntry := range hostList {
+		hostKey := lastSep(hostEntry)
 		_, present := newHostMap[hostKey]
 		if present {
 			log.Println("Ignoring duplicated hostname ", hostKey)
@@ -138,14 +166,18 @@ func (self *HTTPProxy) loadHosts(appKey string, frontend *Frontend, newHostMap m
 }
 
 func (self *HTTPProxy) loadBackends(appKey string, frontend *Frontend) error {
-	backendList, err := self.etcGet(fmt.Sprintf("%s/backends", appKey))
-	if err != nil || len(backendList.Kvs) < 1 {
+	backendList, err := self.discFind(fmt.Sprintf("%s:backends", appKey))
+	if err != nil || len(backendList) < 1 {
 		return fmt.Errorf("No backends")
 	}
 
-	for _, backendEntry := range backendList.Kvs {
-		beKey := lastSep(backendEntry.Key)
-		endpoint := backendEntry.Value
+	for _, backendEntry := range backendList {
+		beKey := lastSep(backendEntry)
+		endpoint, err := self.discGet(fmt.Sprintf("%s:backends:%s", appKey, beKey))
+		if err != nil {
+			log.Println("Skipping invalid backend ", beKey)
+			continue
+		}
 
 		settings := BackendSettings{
 			Endpoint:      endpoint,
@@ -165,11 +197,10 @@ func (self *HTTPProxy) loadBackends(appKey string, frontend *Frontend) error {
 
 func (self *HTTPProxy) Reload() bool {
 	// not optimal, but still decent
-	// traverse etcd structure
+	// traverse disc structure
 	// lock/unlock proxy for least amount of time
 	log.Println("Config loading")
-	var configIndex uint64
-	appList, err := self.etcGet("")
+	appList, err := self.discList("applications")
 	if err != nil {
 		log.Println("Could not load application list")
 		return false
@@ -178,9 +209,8 @@ func (self *HTTPProxy) Reload() bool {
 	newHostMap := make(map[string]*Frontend)
 	newFrontends := make([]*Frontend, 0)
 
-	for _, app := range appList.Kvs {
-		configIndex = appList.Index
-		appKey := lastSep(app.Key)
+	for _, app := range appList {
+		appKey := lastSep(app)
 		log.Println("Loading app ", appKey)
 
 		frontend := NewFrontend(appKey)
@@ -210,7 +240,6 @@ func (self *HTTPProxy) Reload() bool {
 	oldFrontends := self.Frontends
 	self.Frontends = newFrontends
 	self.HostMap = newHostMap
-	self.configVersion = configIndex
 	self.mtx.Unlock()
 
 	log.Println("Stopping old frontends")
@@ -359,7 +388,7 @@ func passBytes(client, server net.Conn) {
 }
 
 func lastSep(k string) string {
-	parts := strings.Split(k, "/")
+	parts := strings.Split(k, ":")
 	return parts[len(parts)-1]
 }
 

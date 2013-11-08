@@ -2,5 +2,7 @@
 APP=$1
 BACKEND=$2
 ENDPOINT=$3
-TTL=$4
-curl -L http://127.0.0.1:4001/v1/keys/knuckles/${APP}/backends/${BACKEND} -d value=${ENDPOINT} -d ttl=$TTL
+
+redis-cli sadd knuckles:applications ${APP}
+redis-cli set knuckles:${APP}:backends:${BACKEND} ${ENDPOINT}
+redis-cli publish knuckles:reload 1
