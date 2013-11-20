@@ -2,7 +2,6 @@ package knuckles
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -86,7 +85,6 @@ func (self *Backend) CheckHealth() {
 	}
 
 	if err != nil || (resp.StatusCode >= 400) {
-		log.Println(self.Name, " going down. Error: ", err)
 		self.Alive = false
 	} else {
 		self.Alive = true

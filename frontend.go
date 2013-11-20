@@ -2,6 +2,7 @@ package knuckles
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 )
 
@@ -51,6 +52,8 @@ func (self *Frontend) Stop() {
 	}
 }
 func (self *Frontend) handleStatus(status BackendStatus) {
+	log.Println("Frontend:", self.Name, "Backend:", status.Name, "Alive:", status.Alive)
+
 	// rebuild list of active servers
 	live := make([]*Backend, 0)
 	for _, backend := range self.Backends {
