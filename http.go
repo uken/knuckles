@@ -200,9 +200,20 @@ func (self *HTTPProxy) Reload() bool {
 	// traverse disc structure
 	// lock/unlock proxy for least amount of time
 	log.Println("Config loading")
-	appList, err := self.discList("applications")
+	var err error
+	var appList []string
+
+	for retries := 0; retries < 2; retries++ {
+		appList, err = self.discList("applications")
+		if err != nil {
+			log.Println("Failed to load application list, retry count", retries)
+		} else {
+			break
+		}
+	}
+
 	if err != nil {
-		log.Println("Could not load application list")
+		log.Println("Could not load application list:", err)
 		return false
 	}
 
