@@ -73,11 +73,9 @@ func main() {
 		settings.CheckInterval = time.Duration(checkInterval) * time.Millisecond
 	}
 
-	if stunnel, err := config.GetBool("http.x_forwarded_for"); err != nil {
+	if settings.XForwardedFor, err = config.GetBool("http.x_forwarded_for"); err != nil {
 		log.Println(err)
 		os.Exit(1)
-	} else {
-		settings.XForwardedFor = stunnel
 	}
 
 	if req_start, err := config.GetBool("http.x_request_start"); err != nil {
@@ -88,9 +86,9 @@ func main() {
 	}
 
 	if settings.XForwardedProto, err = config.Get("http.x_forwarded_proto"); err != nil {
-		log.Println(err)
-		os.Exit(1)
+		log.Println("Skipping X-Forwarded-Proto")
 	}
+
 	discHostCount, err := config.Count("redis.hosts")
 	if err != nil || discHostCount < 1 {
 		log.Println("Missing redis hosts")

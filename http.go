@@ -298,7 +298,9 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("X-Request-Start", requestStart())
 	}
 
-	r.Header.Set("X-Forwarded-Proto", self.Settings.XForwardedProto)
+	if self.Settings.XForwardedProto != "" {
+		r.Header.Set("X-Forwarded-Proto", self.Settings.XForwardedProto)
+	}
 
 	if self.Settings.XForwardedFor {
 		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
