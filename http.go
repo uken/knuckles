@@ -320,7 +320,10 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (self *HTTPProxy) simpleProxy(w http.ResponseWriter, r *http.Request) int {
-	resp, err := http.DefaultTransport.RoundTrip(r)
+	tr := &http.Transport{
+		DisableKeepAlives: true,
+	}
+	resp, err := tr.RoundTrip(r)
 
 	if err != nil {
 		self.status.Increment(MetricError)
