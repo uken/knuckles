@@ -33,10 +33,12 @@ type HTTPProxySettings struct {
 	StatusEndpoint         string
 	StatusPrefix           string
 	CheckInterval          time.Duration
-	SSL                    bool
 	RedirectOnHostnameMiss string
 	RedirectOnBackendMiss  string
 	RedirectOnError        string
+	XForwardedProto        string
+	XForwardedFor          bool
+	XRequestStart          bool
 }
 
 func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
@@ -292,17 +294,15 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Header.Set("X-Request-Start", requestStart())
-
-	proto := "http"
-	if self.Settings.SSL {
-		proto = "https"
-		//stunnel already adds X-Forwarded-For
-	} else {
-		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
+	if self.Settings.XRequestStart {
+		r.Header.Set("X-Request-Start", requestStart())
 	}
 
-	r.Header.Set("X-Forwarded-Proto", proto)
+	r.Header.Set("X-Forwarded-Proto", self.Settings.XForwardedProto)
+
+	if self.Settings.XForwardedFor {
+		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
+	}
 
 	r.URL.Host = backend.Endpoint
 	r.URL.Scheme = "http"

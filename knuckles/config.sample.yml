@@ -1,5 +1,7 @@
 http:
-  stunnel: false
+  x_forwarded_for: false
+  x_forwarded_proto: http
+  x_request_start: true
   address: :8080
   check_interval: 5000
   redirect:
