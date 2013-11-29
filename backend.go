@@ -74,17 +74,17 @@ func (self *Backend) Stop() {
 func (self *Backend) CheckHealth() {
 	current := self.Alive
 
-	client := &http.Client{}
+	tr := &http.Transport{}
 
 	req, _ := http.NewRequest("GET", self.CheckURL.String(), nil)
 	req.Close = true
 
-	resp, err := client.Do(req)
+	resp, err := tr.RoundTrip(req)
 	if err == nil {
 		defer resp.Body.Close()
 	}
 
-	if err != nil || (resp.StatusCode >= 400) {
+	if err != nil {
 		self.Alive = false
 	} else {
 		self.Alive = true
