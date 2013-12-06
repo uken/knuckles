@@ -19,7 +19,7 @@ func NewFrontend(name string) *Frontend {
 	fe.Name = name
 	fe.Backends = make(map[string]*Backend)
 	fe.LiveBackends = make([]*Backend, 0)
-	fe.NotifyChan = make(chan BackendStatus)
+	fe.NotifyChan = make(chan BackendStatus, 100)
 	fe.quitChan = make(chan bool)
 
 	return fe
@@ -44,12 +44,13 @@ func (self *Frontend) Stop() {
 	<-self.quitChan
 
 	close(self.quitChan)
-	close(self.NotifyChan)
 
 	// also stop all backends
 	for _, backend := range self.Backends {
 		backend.Stop()
 	}
+
+	close(self.NotifyChan)
 }
 func (self *Frontend) handleStatus(status BackendStatus) {
 	log.Println("Frontend:", self.Name, "Backend:", status.Name, "Alive:", status.Alive)

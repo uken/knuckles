@@ -13,17 +13,36 @@ import (
 	"time"
 )
 
+type HTTPConfig struct {
+	HostMap   map[string]*Frontend
+	Frontends []*Frontend
+}
+
+type DiscoveryListener interface {
+	Load(duration time.Duration) (*HTTPConfig, error)
+	Start() chan bool
+	Stop()
+	Config(hosts []string, namespace string) error
+}
+
+func NewHTTPConfig() *HTTPConfig {
+	r := new(HTTPConfig)
+	r.HostMap = make(map[string]*Frontend)
+	r.Frontends = make([]*Frontend, 0)
+	return r
+}
+
 type HTTPProxy struct {
 	mtx         sync.RWMutex
 	redisClient *redis.Client
-	HostMap     map[string]*Frontend
-	Frontends   []*Frontend
+	config      *HTTPConfig
 	quitChan    chan bool
 	Server      http.Server
 	Settings    HTTPProxySettings
 	HttpStatus  http.Server
 	status      *HTTPStats
 	running     bool
+	discovery   DiscoveryListener
 }
 
 type HTTPProxySettings struct {
@@ -45,8 +64,7 @@ func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 	var err error
 
 	proxy := new(HTTPProxy)
-	proxy.HostMap = make(map[string]*Frontend)
-	proxy.Frontends = make([]*Frontend, 0)
+	proxy.config = NewHTTPConfig()
 	proxy.Settings = settings
 	proxy.Server.Addr = settings.Endpoint
 	mux := http.NewServeMux()
@@ -58,7 +76,8 @@ func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 		return nil, err
 	}
 
-	proxy.redisClient = redis.New(settings.DiscEndpoint...)
+	proxy.discovery = &redisDriver{}
+	proxy.discovery.Config(settings.DiscEndpoint, settings.DiscKeyspace)
 
 	proxy.quitChan = make(chan bool)
 
@@ -72,129 +91,30 @@ func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 func (self *HTTPProxy) Start() {
 	self.running = true
 
-	ch := make(chan redis.PubSubMessage)
-	stop := make(chan bool)
-
 	go self.Server.ListenAndServe()
 	go self.status.Start()
 
-	go self.Watch(ch, stop)
+	ch := self.discovery.Start()
 
 	for self.running {
 		select {
 		case <-self.quitChan:
 			self.running = false
-			stop <- true
-		case resp := <-ch:
-			// only reload on legitimate notifications
-			if resp.Error == nil {
-				self.Reload()
-			}
+		case <-ch:
+			self.Reload()
 		}
 	}
 	self.quitChan <- true
-}
-
-// also step locked to main thread
-func (self *HTTPProxy) Watch(callerCh chan redis.PubSubMessage, stop chan bool) {
-	ch := make(chan redis.PubSubMessage)
-	channel := fmt.Sprintf("%s:reload", self.Settings.DiscKeyspace)
-
-	for self.running {
-		err := self.redisClient.Subscribe(channel, ch, stop)
-
-		if err != nil {
-			log.Println("Discovery error ", err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		for {
-			resp := <-ch
-			if resp.Error != nil {
-				log.Println(resp.Error)
-				log.Println("Discovery notification error ", err)
-				break
-			} else {
-				callerCh <- resp
-			}
-		}
-
-	}
 }
 
 func (self *HTTPProxy) Stop() {
 	self.quitChan <- true
 	<-self.quitChan
-	for _, f := range self.HostMap {
+	for _, f := range self.config.HostMap {
 		f.Stop()
 	}
 	self.status.Stop()
 	close(self.quitChan)
-}
-
-func (self *HTTPProxy) keySpaced(key string) string {
-	return fmt.Sprintf("%s:%s", self.Settings.DiscKeyspace, key)
-}
-
-func (self *HTTPProxy) discGet(key string) (string, error) {
-	return self.redisClient.Get(self.keySpaced(key))
-}
-
-func (self *HTTPProxy) discList(key string) ([]string, error) {
-	return self.redisClient.SMembers(self.keySpaced(key))
-}
-
-func (self *HTTPProxy) discFind(key string) ([]string, error) {
-	return self.redisClient.Keys(fmt.Sprintf("%s:*", self.keySpaced(key)))
-}
-
-func (self *HTTPProxy) loadHosts(appKey string, frontend *Frontend, newHostMap map[string]*Frontend) error {
-	hostList, err := self.discList(fmt.Sprintf("%s:hostnames", appKey))
-	if err != nil || len(hostList) < 1 {
-		return fmt.Errorf("No hostnames")
-	}
-
-	for _, hostEntry := range hostList {
-		hostKey := lastSep(hostEntry)
-		_, present := newHostMap[hostKey]
-		if present {
-			log.Println("Ignoring duplicated hostname ", hostKey)
-			continue
-		}
-		newHostMap[hostKey] = frontend
-	}
-	return nil
-}
-
-func (self *HTTPProxy) loadBackends(appKey string, frontend *Frontend) error {
-	backendList, err := self.discFind(fmt.Sprintf("%s:backends", appKey))
-	if err != nil || len(backendList) < 1 {
-		return fmt.Errorf("No backends")
-	}
-
-	for _, backendEntry := range backendList {
-		beKey := lastSep(backendEntry)
-		endpoint, err := self.discGet(fmt.Sprintf("%s:backends:%s", appKey, beKey))
-		if err != nil {
-			log.Println("Skipping invalid backend ", beKey)
-			continue
-		}
-
-		settings := BackendSettings{
-			Endpoint:      endpoint,
-			CheckInterval: self.Settings.CheckInterval,
-			Updates:       frontend.NotifyChan,
-			CheckUrl:      fmt.Sprintf("http://%s", endpoint),
-		}
-		backend, err := NewBackend(beKey, settings)
-		if err != nil {
-			log.Println("Skipping invalid backend ", beKey)
-			continue
-		}
-		frontend.AddBackend(backend)
-	}
-	return nil
 }
 
 func (self *HTTPProxy) Reload() bool {
@@ -202,61 +122,25 @@ func (self *HTTPProxy) Reload() bool {
 	// traverse disc structure
 	// lock/unlock proxy for least amount of time
 	log.Println("Config loading")
-	var err error
-	var appList []string
-
-	for retries := 0; retries < 2; retries++ {
-		appList, err = self.discList("applications")
-		if err != nil {
-			log.Println("Failed to load application list, retry count", retries)
-		} else {
-			break
-		}
-	}
-
+	newConfig, err := self.discovery.Load(self.Settings.CheckInterval)
 	if err != nil {
-		log.Println("Could not load application list:", err)
+		log.Println("Config load failed, keeping old config")
 		return false
 	}
 
-	newHostMap := make(map[string]*Frontend)
-	newFrontends := make([]*Frontend, 0)
-
-	for _, app := range appList {
-		appKey := lastSep(app)
-		log.Println("Loading app ", appKey)
-
-		frontend := NewFrontend(appKey)
-
-		err = self.loadHosts(appKey, frontend, newHostMap)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-
-		err = self.loadBackends(appKey, frontend)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-
-		newFrontends = append(newFrontends, frontend)
-	}
-
-	for _, fr := range newFrontends {
+	for _, fr := range newConfig.Frontends {
 		log.Println("Starting new frontend ", fr.Name)
 		go fr.Start()
 	}
 
 	log.Println("Replacing configuration")
 	self.mtx.Lock()
-	oldFrontends := self.Frontends
-	self.Frontends = newFrontends
-	self.HostMap = newHostMap
+	oldConfig := self.config
+	self.config = newConfig
 	self.mtx.Unlock()
 
 	log.Println("Stopping old frontends")
-	for _, frontend := range oldFrontends {
+	for _, frontend := range oldConfig.Frontends {
 		log.Println("Stopping old frontend ", frontend.Name)
 		frontend.Stop()
 	}
@@ -279,7 +163,7 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hostname = hostname[:sep]
 	}
 
-	frontend, ok := self.HostMap[hostname]
+	frontend, ok := self.config.HostMap[hostname]
 	if !ok {
 		self.status.Increment(MetricNoHostname)
 		http.Redirect(w, r, self.Settings.RedirectOnHostnameMiss, http.StatusTemporaryRedirect)
