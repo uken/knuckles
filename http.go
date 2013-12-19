@@ -134,7 +134,8 @@ func (self *HTTPProxy) Reload() bool {
 
 func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	self.mtx.RLock()
-	defer self.mtx.RUnlock()
+	localConfig := self.config
+	self.mtx.RUnlock()
 
 	self.status.Increment(MetricRequest)
 
@@ -144,7 +145,7 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hostname = hostname[:sep]
 	}
 
-	frontend, ok := self.config.HostMap[hostname]
+	frontend, ok := localConfig.HostMap[hostname]
 	if !ok {
 		self.status.Increment(MetricNoHostname)
 		http.Redirect(w, r, self.Settings.RedirectOnHostnameMiss, http.StatusTemporaryRedirect)
