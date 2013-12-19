@@ -13,25 +13,6 @@ import (
 	"time"
 )
 
-type HTTPConfig struct {
-	HostMap   map[string]*Frontend
-	Frontends []*Frontend
-}
-
-type DiscoveryListener interface {
-	Load(duration time.Duration) (*HTTPConfig, error)
-	Start() chan bool
-	Stop()
-	Config(hosts []string, namespace string) error
-}
-
-func NewHTTPConfig() *HTTPConfig {
-	r := new(HTTPConfig)
-	r.HostMap = make(map[string]*Frontend)
-	r.Frontends = make([]*Frontend, 0)
-	return r
-}
-
 type HTTPProxy struct {
 	mtx         sync.RWMutex
 	redisClient *redis.Client
@@ -190,7 +171,7 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
 	}
 
-	r.URL.Host = backend.Endpoint
+	r.URL.Host = backend
 	r.URL.Scheme = "http"
 
 	connection := r.Header.Get("Connection")
@@ -198,7 +179,7 @@ func (self *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		self.upgradeConnection(w, r)
 	} else {
 		respStatus := self.simpleProxy(w, r)
-		self.status.IncrementBackend(frontend.Name, backend.Name, respStatus)
+		self.status.IncrementFrontend(frontend.Name, respStatus)
 	}
 
 }

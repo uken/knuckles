@@ -42,7 +42,7 @@ func (self *redisDriver) Load(checkInterval time.Duration) (*HTTPConfig, error) 
 		appKey := lastSep(app)
 		log.Println("Loading app ", appKey)
 
-		frontend := NewFrontend(appKey)
+		frontend := NewFrontend(appKey, checkInterval)
 
 		err = self.loadHosts(appKey, frontend, config.HostMap)
 		if err != nil {
@@ -83,6 +83,8 @@ func (self *redisDriver) Start() chan bool {
 				select {
 				case <-self.quitChan:
 					running = false
+				case <-time.After(30 * time.Second):
+					self.ping()
 				case resp := <-ch:
 					if resp.Error != nil {
 						log.Println(resp.Error)
@@ -96,6 +98,10 @@ func (self *redisDriver) Start() chan bool {
 		}
 	}()
 	return retChan
+}
+
+func (self *redisDriver) ping() {
+	self.redisClient.Ping()
 }
 
 func (self *redisDriver) Stop() {
@@ -156,19 +162,7 @@ func (self *redisDriver) loadBackends(appKey string, frontend *Frontend, checkIn
 			log.Println("Skipping invalid backend ", beKey)
 			continue
 		}
-
-		settings := BackendSettings{
-			Endpoint:      endpoint,
-			CheckInterval: checkInterval,
-			Updates:       frontend.NotifyChan,
-			CheckUrl:      fmt.Sprintf("http://%s", endpoint),
-		}
-		backend, err := NewBackend(beKey, settings)
-		if err != nil {
-			log.Println("Skipping invalid backend ", beKey)
-			continue
-		}
-		frontend.AddBackend(backend)
+		frontend.AddBackend(beKey, endpoint)
 	}
 	return nil
 }

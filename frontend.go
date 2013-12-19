@@ -4,35 +4,44 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
+	"sync"
+	"time"
 )
 
 type Frontend struct {
-	Name         string
-	Backends     map[string]*Backend
-	LiveBackends []*Backend
-	NotifyChan   chan BackendStatus
-	quitChan     chan bool
+	mutex         sync.Mutex
+	Backends      map[string]string
+	keepAliveMap  map[string]bool
+	LiveBackends  []string
+	quitChan      chan bool
+	CheckInterval time.Duration
+	Name          string
 }
 
-func NewFrontend(name string) *Frontend {
+func NewFrontend(name string, checkInterval time.Duration) *Frontend {
 	fe := new(Frontend)
 	fe.Name = name
-	fe.Backends = make(map[string]*Backend)
-	fe.LiveBackends = make([]*Backend, 0)
-	fe.NotifyChan = make(chan BackendStatus, 100)
+	fe.CheckInterval = checkInterval
+	fe.Backends = make(map[string]string)
+	fe.keepAliveMap = make(map[string]bool)
+	fe.LiveBackends = make([]string, 0)
 	fe.quitChan = make(chan bool)
 
 	return fe
 }
 
 func (self *Frontend) Start() {
+
+	self.keepAlive()
+
 	run := true
 	for run {
 		select {
 		case <-self.quitChan:
 			run = false
-		case status := <-self.NotifyChan:
-			self.handleStatus(status)
+		case <-time.After(self.CheckInterval):
+			self.keepAlive()
 		}
 	}
 
@@ -40,63 +49,89 @@ func (self *Frontend) Start() {
 }
 
 func (self *Frontend) Stop() {
+	log.Println("Stopping frontend", self.Name)
 	self.quitChan <- true
 	<-self.quitChan
+	log.Println("Stopped frontend", self.Name)
 
 	close(self.quitChan)
-
-	// also stop all backends
-	for _, backend := range self.Backends {
-		backend.Stop()
-	}
-
-	close(self.NotifyChan)
 }
-func (self *Frontend) handleStatus(status BackendStatus) {
-	log.Println("Frontend:", self.Name, "Backend:", status.Name, "Alive:", status.Alive)
 
+func (self *Frontend) keepAlive() {
 	// rebuild list of active servers
-	live := make([]*Backend, 0)
-	for _, backend := range self.Backends {
-		if backend.Alive {
-			live = append(live, backend)
+	live := make([]string, 0)
+	changed := false
+
+	for name, endpoint := range self.Backends {
+		previous := self.keepAliveMap[name]
+		current := checkEndpoint(endpoint)
+		if previous != current {
+			self.keepAliveMap[name] = current
+			changed = true
+			log.Println("[", self.Name, "] Backend ", name, " IsAlive ", current)
 		}
 	}
-	self.LiveBackends = live
+
+	if changed {
+
+		for name, alive := range self.keepAliveMap {
+			if alive {
+				live = append(live, self.Backends[name])
+			}
+		}
+
+		self.mutex.Lock()
+		self.LiveBackends = live
+		self.mutex.Unlock()
+	}
 }
 
-func (self *Frontend) PickBackend() (*Backend, error) {
+func (self *Frontend) PickBackend() (string, error) {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+
 	tot := len(self.LiveBackends)
 	if tot < 1 {
-		return nil, fmt.Errorf("No backends available")
+		return "", fmt.Errorf("No backends available")
 	}
 
 	backend := self.LiveBackends[rand.Int()%tot]
 
-	if backend == nil {
-		return nil, fmt.Errorf("No backends available")
+	if backend == "" {
+		return "", fmt.Errorf("No backends available")
 	}
 
 	return backend, nil
 }
 
-func (self *Frontend) AddBackend(backend *Backend) error {
-	_, ok := self.Backends[backend.Name]
+func (self *Frontend) AddBackend(name, endpoint string) error {
+	self.mutex.Lock()
+	defer self.mutex.Unlock()
+
+	_, ok := self.Backends[name]
 	if ok {
 		return fmt.Errorf("Backend already present")
 	}
 
-	self.Backends[backend.Name] = backend
-	go backend.Start()
+	self.Backends[name] = endpoint
+
 	return nil
 }
 
-func (self *Frontend) BackendStatus(name string) bool {
+func checkEndpoint(endpoint string) bool {
+	tr := &http.Transport{}
 
-	be, ok := self.Backends[name]
-	if ok {
-		return be.Alive
+	req, _ := http.NewRequest("GET", fmt.Sprintf("http://%s", endpoint), nil)
+	req.Close = true
+
+	resp, err := tr.RoundTrip(req)
+	if err == nil {
+		defer resp.Body.Close()
 	}
 
-	return false
+	if err != nil {
+		return false
+	}
+
+	return true
 }

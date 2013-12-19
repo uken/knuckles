@@ -8,9 +8,8 @@ import (
 	"time"
 )
 
-type backendStat struct {
+type frontendStat struct {
 	Frontend   string
-	Backend    string
 	StatusCode int
 }
 
@@ -20,9 +19,8 @@ type statsHolder struct {
 	NoHostname uint64
 	NoBackend  uint64
 	Error      uint64
-	Frontends  map[string]uint64
-	// Backends[frontend][backend][status] = counter
-	Backends map[backendStat]uint64
+	// Frontends[frontend][status] = counter
+	Frontends map[frontendStat]uint64
 }
 
 type HTTPStats struct {
@@ -45,8 +43,7 @@ const (
 
 func newstatsHolder() *statsHolder {
 	ret := new(statsHolder)
-	ret.Frontends = make(map[string]uint64)
-	ret.Backends = make(map[backendStat]uint64)
+	ret.Frontends = make(map[frontendStat]uint64)
 	return ret
 }
 
@@ -86,7 +83,7 @@ func (self *HTTPStats) dispatch() {
 	self.sendStat("_.no_hostname", oldStats.NoHostname)
 	self.sendStat("_.errors", oldStats.Error)
 
-	for k, v := range oldStats.Backends {
+	for k, v := range oldStats.Frontends {
 		self.sendStat(k.String(), v)
 	}
 }
@@ -115,21 +112,14 @@ func (self *HTTPStats) Increment(metric Metric) {
 	}
 }
 
-func (self *HTTPStats) IncrementFrontend(name string) {
+func (self *HTTPStats) IncrementFrontend(frontend string, status int) {
 	self.mtx.Lock()
 	defer self.mtx.Unlock()
-	self.stats.Frontends[name] += 1
-}
-
-func (self *HTTPStats) IncrementBackend(frontend, backend string, status int) {
-	self.mtx.Lock()
-	defer self.mtx.Unlock()
-	statKey := backendStat{
+	statKey := frontendStat{
 		Frontend:   frontend,
-		Backend:    backend,
 		StatusCode: status,
 	}
-	self.stats.Backends[statKey] += 1
+	self.stats.Frontends[statKey] += 1
 }
 
 func (self *HTTPStats) statName(name string) string {
@@ -148,6 +138,6 @@ func (self *HTTPStats) sendStat(name string, value uint64) {
 	}
 }
 
-func (self *backendStat) String() string {
-	return fmt.Sprintf("%s.%s.%d", self.Frontend, self.Backend, self.StatusCode)
+func (self *frontendStat) String() string {
+	return fmt.Sprintf("%s.%d", self.Frontend, self.StatusCode)
 }
