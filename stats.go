@@ -134,7 +134,7 @@ func (self *HTTPStats) sendStat(name string, value uint64) {
 
 	_, err := fmt.Fprintf(self.statsD, "%s%s:%d|c", self.prefix, name, value)
 	if err != nil {
-		log.Println(err)
+		log.Println("Error publishing stats:", err)
 	}
 }
 

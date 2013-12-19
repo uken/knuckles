@@ -46,13 +46,13 @@ func (self *redisDriver) Load(checkInterval time.Duration) (*HTTPConfig, error) 
 
 		err = self.loadHosts(appKey, frontend, config.HostMap)
 		if err != nil {
-			log.Println(err)
+			log.Println("Error loading hosts:", err)
 			continue
 		}
 
 		err = self.loadBackends(appKey, frontend, checkInterval)
 		if err != nil {
-			log.Println(err)
+			log.Println("Error loading backends:", err)
 			continue
 		}
 
