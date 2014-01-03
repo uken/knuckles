@@ -29,6 +29,7 @@ type HTTPProxy struct {
 type HTTPProxySettings struct {
 	DiscEndpoint           []string
 	DiscKeyspace           string
+	DiscDriver             string
 	Endpoint               string
 	StatusEndpoint         string
 	StatusPrefix           string
@@ -57,7 +58,13 @@ func NewHTTPProxy(settings HTTPProxySettings) (*HTTPProxy, error) {
 		return nil, err
 	}
 
-	proxy.discovery = &redisDriver{}
+	switch settings.DiscDriver {
+	case "etcd":
+		proxy.discovery = &etcdDriver{}
+	default:
+		proxy.discovery = &redisDriver{}
+	}
+
 	proxy.discovery.Config(settings.DiscEndpoint, settings.DiscKeyspace)
 
 	proxy.quitChan = make(chan bool)
@@ -267,11 +274,6 @@ func passBytes(client, server net.Conn) {
 	//wait for second side to exit
 	<-done
 	close(done)
-}
-
-func lastSep(k string) string {
-	parts := strings.Split(k, ":")
-	return parts[len(parts)-1]
 }
 
 func requestStart() string {

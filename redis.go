@@ -39,7 +39,7 @@ func (self *redisDriver) Load(checkInterval time.Duration) (*HTTPConfig, error) 
 	config := NewHTTPConfig()
 
 	for _, app := range appList {
-		appKey := lastSep(app)
+		appKey := self.lastSep(app)
 		log.Println("Loading app ", appKey)
 
 		frontend := NewFrontend(appKey, checkInterval)
@@ -138,7 +138,7 @@ func (self *redisDriver) loadHosts(appKey string, frontend *Frontend, newHostMap
 	}
 
 	for _, hostEntry := range hostList {
-		hostKey := lastSep(hostEntry)
+		hostKey := self.lastSep(hostEntry)
 		_, present := newHostMap[hostKey]
 		if present {
 			log.Println("Ignoring duplicated hostname ", hostKey)
@@ -156,7 +156,7 @@ func (self *redisDriver) loadBackends(appKey string, frontend *Frontend, checkIn
 	}
 
 	for _, backendEntry := range backendList {
-		beKey := lastSep(backendEntry)
+		beKey := self.lastSep(backendEntry)
 		endpoint, err := self.get(fmt.Sprintf("%s:backends:%s", appKey, beKey))
 		if err != nil {
 			log.Println("Skipping invalid backend ", beKey)

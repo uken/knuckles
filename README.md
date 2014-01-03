@@ -4,7 +4,7 @@ _Guarding our Chaos Emeralds_
 
 Provides hostname-based load balancing for HTTP and WebSocket requests.
 
-Configuration is stored in `redis`, having no downtime during reconfiguration.
+Configuration is stored in either `redis` or `etcD`, having no downtime during reconfiguration.
 
 
 # Usage
@@ -14,11 +14,25 @@ Configuration is stored in `redis`, having no downtime during reconfiguration.
 
 Check this [config sample](knuckles/config.sample.yml)
 
-# Redis Keys
+# Redis
+
     knuckles:applications = SET with applications
-    knuckles:reload = PubSub for reload operation
     knuckles:<application>:hostnames = SET with 'Host' fields
     knuckles:<application>:backends:<backend_name> = HTTP endpoint (ex: be01.mycompany.com:80)
-    # check script directory for examples
+    knuckles:reload = PubSub for reload operation
+    
 
-Changing keys' TTL does not trigger a config reload.
+Redis requires a reload notification (pubsub above). Publishing any value will reload the config, ex:
+
+    PUBLISH knuckles:reload 1
+
+
+# etcD
+
+    knuckles/applications/<application>/hostnames/<hostname>
+    knuckles/applications/<application>/backends/<backend_name> = HTTP endpoint (ex: be01.mycompany.com:80)
+
+
+Either way, changing keys' TTL does not trigger a config reload.
+
+Check script directory for examples.

@@ -4,17 +4,16 @@ http:
   x_request_start: true
   address: :8080
   check_interval: 5000
+  discovery: etcd
   redirect:
     no_hostname: http://thebest404pageever.com/
     no_backend: http://404.jodi.org/
     error: http://500.chromeexperiments.com/
 
-redis:
+discovery:
   keyspace: knuckles
   hosts:
-    - localhost:6379
-    - localhost:6379
-    - localhost:6379
+    - http://localhost:4001
 
 statsd:
   address: localhost:8125

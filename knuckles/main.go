@@ -36,6 +36,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if settings.DiscDriver, err = config.Get("http.discovery"); err != nil {
+		log.Println(err)
+		os.Exit(1)
+	}
+
 	if settings.StatusEndpoint, err = config.Get("statsd.address"); err != nil {
 		log.Println(err)
 		os.Exit(1)
@@ -61,7 +66,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if settings.DiscKeyspace, err = config.Get("redis.keyspace"); err != nil {
+	if settings.DiscKeyspace, err = config.Get("discovery.keyspace"); err != nil {
 		log.Println(err)
 		os.Exit(1)
 	}
@@ -89,16 +94,16 @@ func main() {
 		log.Println("Skipping X-Forwarded-Proto")
 	}
 
-	discHostCount, err := config.Count("redis.hosts")
+	discHostCount, err := config.Count("discovery.hosts")
 	if err != nil || discHostCount < 1 {
-		log.Println("Missing redis hosts")
+		log.Println("Missing discovery hosts")
 		os.Exit(1)
 	}
 
-	log.Println("Adding ", discHostCount, " redis hosts")
+	log.Println("Adding ", discHostCount, " discovery hosts")
 	settings.DiscEndpoint = []string{}
 	for i := 0; i < discHostCount; i++ {
-		k := fmt.Sprintf("redis.hosts[%d]", i)
+		k := fmt.Sprintf("discovery.hosts[%d]", i)
 		if addr, err := config.Get(k); err != nil {
 			log.Println(err)
 			os.Exit(1)
