@@ -201,7 +201,7 @@ func (self *HTTPProxy) simpleProxy(w http.ResponseWriter, r *http.Request) int {
 	if err != nil {
 		self.status.Increment(MetricError)
 		http.Redirect(w, r, self.Settings.RedirectOnError, http.StatusTemporaryRedirect)
-		log.Println("Error proxying simple request:", err)
+		log.Println("Error proxying simple request [", r.RequestURI, "]:", err)
 		return http.StatusTemporaryRedirect
 	}
 	defer resp.Body.Close()
