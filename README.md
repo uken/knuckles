@@ -4,35 +4,43 @@ _Guarding our Chaos Emeralds_
 
 Provides hostname-based load balancing for HTTP and WebSocket requests.
 
-Configuration is stored in either `redis` or `etcD`, having no downtime during reconfiguration.
+Configuration is stored on `redis`, having no downtime during reconfiguration.
 
 
-# Usage
+## Usage
 
     go get -u github.com/uken/knuckles/knuckles
-    ./knuckles -config path_to_config.yml
+    ./knuckles -config path_to_knuckles_config.conf
 
-Check this [config sample](knuckles/config.sample.yml)
+Check this [config sample](knuckles/knuckles.sample.conf)
 
-# Redis
+## Operation
 
-    knuckles:applications = SET with applications
-    knuckles:<application>:hostnames = SET with 'Host' fields
-    knuckles:<application>:backends:<backend_name> = HTTP endpoint (ex: be01.mycompany.com:80)
-    knuckles:reload = PubSub for reload operation
-    
+## Redis
 
-Redis requires a reload notification (pubsub above). Publishing any value will reload the config, ex:
+## Deployment Considerations
 
-    PUBLISH knuckles:reload 1
+Redis is the bottleneck. Each HTTP request generates 3 Redis queries:
+- Hostname check
+- Backend selection
+- Backend state
 
+It's a design trade-off so proxy instances can be totally stateless.
 
-# etcD
+Things go fine with multiple proxies and a single Redis instance until 30k req/s. After that,
+the deployment guideline is:
 
-    knuckles/applications/<application>/hostnames/<hostname>
-    knuckles/applications/<application>/backends/<backend_name> = HTTP endpoint (ex: be01.mycompany.com:80)
-
-
-Either way, changing keys' TTL does not trigger a config reload.
-
-Check script directory for examples.
+      [clients]      [clients]      [clients]       [clients]
+    +------------+ +------------+ +------------+ +------------+
+    |  knuckles  | |  knuckles  | |  knuckles  | |  knuckles  |
+    |            | |            | |            | |            |
+    | redis-slave| | redis-slave| | redis-slave| | redis-slave|
+    +------------+ +------------+ +------------+ +------------+
+          |                   |       |                 |
+          |                   |       |                 |
+          |                +------------+               |
+          -----------------|redis-master|----------------
+                           |            |
+                           |  knuckles  |
+                           +------------+
+                            [API Access]
