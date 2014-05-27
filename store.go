@@ -66,7 +66,6 @@ func (r *RedisStore) EndpointForHostname(name string) (string, error) {
   }
 
   if !exists {
-    r.RemoveBackend(appName, backend)
     return "", ErrDeadBackend
   }
 
