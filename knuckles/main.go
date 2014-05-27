@@ -20,6 +20,12 @@ type redisFormat struct {
   Namespace string
 }
 
+type pingerFormat struct {
+  Redis     string
+  Namespace string
+  Interval  int
+}
+
 type listenerFormat struct {
   Address         string
   XRequestStart   bool   `toml:"x_request_start"`
@@ -34,6 +40,7 @@ type configFormat struct {
   Api       apiFormat
   Listeners map[string]listenerFormat
   Redis     redisFormat
+  Pinger    pingerFormat
 }
 
 var configFile = flag.String("config", "/etc/knuckles.conf", "Configuration File")
@@ -43,6 +50,7 @@ func main() {
   var err error
   var wg sync.WaitGroup
   var proxies []*knuckles.HTTPProxy
+  var pinger *knuckles.Pinger
 
   flag.Parse()
 
@@ -60,7 +68,7 @@ func main() {
     os.Exit(1)
   }
 
-  store, err := knuckles.NewRedisStore(config.Redis.Namespace, []string{config.Redis.Address})
+  store, err := knuckles.NewRedisStore(config.Redis.Namespace, config.Redis.Address)
 
   if err != nil {
     log.Println(err)
@@ -76,6 +84,16 @@ func main() {
   if err != nil {
     log.Println(err)
     os.Exit(1)
+  }
+
+  if config.Pinger.Redis != "" {
+    log.Println("Starting PING service")
+    pinger, err = knuckles.NewPinger(config.Pinger.Namespace, config.Pinger.Redis, config.Pinger.Interval)
+    if err != nil {
+      log.Println(err)
+      os.Exit(1)
+    }
+    wg.Add(1)
   }
 
   for lName, lF := range config.Listeners {
@@ -113,6 +131,12 @@ func main() {
     }
     api.Stop()
     wg.Done()
+
+    if config.Pinger.Redis != "" {
+      pinger.Stop()
+      wg.Done()
+    }
+
   }()
 
   for _, proxy := range proxies {
@@ -125,6 +149,10 @@ func main() {
 
   wg.Add(1)
   go api.Start()
+
+  if config.Pinger.Redis != "" {
+    go pinger.Start()
+  }
 
   wg.Wait()
   log.Println("Stopped")

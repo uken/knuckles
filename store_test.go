@@ -6,10 +6,10 @@ import (
 )
 
 var namespace = "test:"
-var addr = []string{"localhost:6379"}
+var addr = "localhost:6379"
 
 func redisClear() {
-  c := redis.New(addr...)
+  c := redis.New(addr)
   c.FlushAll()
 }
 

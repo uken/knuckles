@@ -1,7 +1,7 @@
 all:
 	cd .. && go install
 	go build
-	./knuckles -config=./config.sample.yml
+	./knuckles -config=./knuckles.sample.conf
 
 linux:
 	cd .. && GOARCH=amd64 GOOS=linux go install
