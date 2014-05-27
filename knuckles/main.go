@@ -1,134 +1,131 @@
 package main
 
 import (
-	"flag"
-	"fmt"
-	"github.com/kylelemons/go-gypsy/yaml"
-	"github.com/uken/knuckles"
-	"log"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+  "flag"
+  "github.com/BurntSushi/toml"
+  "github.com/uken/knuckles"
+  "log"
+  "os"
+  "os/signal"
+  "sync"
+  "syscall"
 )
 
-var configFile = flag.String("config", "", "Configuration File")
+type apiFormat struct {
+  Address string
+}
+
+type redisFormat struct {
+  Address   string
+  Namespace string
+}
+
+type listenerFormat struct {
+  Address         string
+  XRequestStart   bool   `toml:"x_request_start"`
+  XForwardedFor   bool   `toml:"x_forwarded_for"`
+  XForwardedProto string `toml:"x_forwarded_proto"`
+  ErrorNoBackend  string `toml:"error_no_backend"`
+  ErrorNoHostname string `toml:"error_no_hostname"`
+  ErrorInternal   string `toml:"error_internal"`
+}
+
+type configFormat struct {
+  Api       apiFormat
+  Listeners map[string]listenerFormat
+  Redis     redisFormat
+}
+
+var configFile = flag.String("config", "/etc/knuckles.conf", "Configuration File")
 var proxy *knuckles.HTTPProxy
 
 func main() {
-	flag.Parse()
+  var err error
+  var wg sync.WaitGroup
+  var proxies []*knuckles.HTTPProxy
 
-	if *configFile == "" {
-		flag.PrintDefaults()
-		os.Exit(2)
-	}
+  flag.Parse()
 
-	config, err := yaml.ReadFile(*configFile)
-	if err != nil {
-		log.Println(err)
-		os.Exit(1)
+  if *configFile == "" {
+    flag.PrintDefaults()
+    os.Exit(2)
+  }
 
-	}
+  var config configFormat
 
-	var settings knuckles.HTTPProxySettings
-	if settings.Endpoint, err = config.Get("http.address"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+  _, err = toml.DecodeFile(*configFile, &config)
 
-	if settings.DiscDriver, err = config.Get("http.discovery"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+  if err != nil {
+    log.Println(err)
+    os.Exit(1)
+  }
 
-	if settings.StatusEndpoint, err = config.Get("statsd.address"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+  store, err := knuckles.NewRedisStore(config.Redis.Namespace, []string{config.Redis.Address})
 
-	if settings.StatusPrefix, err = config.Get("statsd.prefix"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+  if err != nil {
+    log.Println(err)
+    os.Exit(1)
+  }
 
-	if settings.RedirectOnError, err = config.Get("http.redirect.error"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+  apiConfig := knuckles.HTTPAPIConfig{}
+  apiConfig.Addr = config.Api.Address
+  apiConfig.Store = store
 
-	if settings.RedirectOnBackendMiss, err = config.Get("http.redirect.no_backend"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+  api, err := knuckles.NewHTTPAPI(apiConfig)
 
-	if settings.RedirectOnHostnameMiss, err = config.Get("http.redirect.no_hostname"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+  if err != nil {
+    log.Println(err)
+    os.Exit(1)
+  }
 
-	if settings.DiscKeyspace, err = config.Get("discovery.keyspace"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+  for lName, lF := range config.Listeners {
 
-	if checkInterval, err := config.GetInt("http.check_interval"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	} else {
-		settings.CheckInterval = time.Duration(checkInterval) * time.Millisecond
-	}
+    lConf := knuckles.HTTPProxyConfig{
+      Store:                 store,
+      Addr:                  lF.Address,
+      XForwardedFor:         lF.XForwardedFor,
+      XForwardedProto:       lF.XForwardedProto,
+      XRequestStart:         lF.XRequestStart,
+      RedirectNoHostname:    lF.ErrorNoHostname,
+      RedirectNoBackend:     lF.ErrorNoBackend,
+      RedirectInternalError: lF.ErrorInternal,
+    }
 
-	if settings.XForwardedFor, err = config.GetBool("http.x_forwarded_for"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+    listener, err := knuckles.NewHTTPProxy(lConf)
 
-	if req_start, err := config.GetBool("http.x_request_start"); err != nil {
-		log.Println(err)
-		os.Exit(1)
-	} else {
-		settings.XRequestStart = req_start
-	}
+    if err != nil {
+      log.Println(err)
+      os.Exit(1)
+    }
 
-	if settings.XForwardedProto, err = config.Get("http.x_forwarded_proto"); err != nil {
-		log.Println("Skipping X-Forwarded-Proto")
-	}
+    log.Println("Adding listener", lName, lF.Address)
 
-	discHostCount, err := config.Count("discovery.hosts")
-	if err != nil || discHostCount < 1 {
-		log.Println("Missing discovery hosts")
-		os.Exit(1)
-	}
+    proxies = append(proxies, listener)
+  }
 
-	log.Println("Adding ", discHostCount, " discovery hosts")
-	settings.DiscEndpoint = []string{}
-	for i := 0; i < discHostCount; i++ {
-		k := fmt.Sprintf("discovery.hosts[%d]", i)
-		if addr, err := config.Get(k); err != nil {
-			log.Println(err)
-			os.Exit(1)
-			return
-		} else {
-			settings.DiscEndpoint = append(settings.DiscEndpoint, addr)
-		}
-	}
+  // terminate on ctrl+c or via kill
+  signalC := make(chan os.Signal)
+  signal.Notify(signalC, os.Interrupt, syscall.SIGTERM)
+  go func() {
+    <-signalC
+    for _, proxy := range proxies {
+      proxy.Stop()
+    }
+    api.Stop()
+    wg.Done()
+  }()
 
-	log.Println(settings.DiscEndpoint)
-	proxy, err = knuckles.NewHTTPProxy(settings)
+  for _, proxy := range proxies {
+    go func(p *knuckles.HTTPProxy) {
+      wg.Add(1)
+      p.Start()
+      wg.Done()
+    }(proxy)
+  }
 
-	if err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+  wg.Add(1)
+  go api.Start()
 
-	// terminate on ctrl+c or via kill
-	signalC := make(chan os.Signal, 1)
-	signal.Notify(signalC, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-signalC
-		proxy.Stop()
-	}()
-
-	proxy.Start()
-	log.Println("Stopped")
+  wg.Wait()
+  log.Println("Stopped")
 }

@@ -42,6 +42,10 @@ func (r *RedisStore) EndpointForHostname(name string) (string, error) {
     return "", err
   }
 
+  if appName == "" {
+    return "", ErrNoHostname
+  }
+
   members, err := r.client.SRandMember(r.Key("backend:%s", appName), 1)
 
   if err != nil {
