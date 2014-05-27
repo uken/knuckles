@@ -89,7 +89,7 @@ func Test_StoreBackend(t *testing.T) {
     t.Fatal(err)
   }
 
-  if bk != "something.com:8080" {
+  if bk.Addr() != "something.com:8080" {
     t.Fatal("Invalid backend", bk)
   }
 }

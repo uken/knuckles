@@ -84,7 +84,7 @@ func (h *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     return
   }
 
-  r.URL.Host = endpoint
+  r.URL.Host = endpoint.Addr()
   r.URL.Scheme = "http"
 
   connection := r.Header.Get("Connection")
