@@ -1,8 +1,7 @@
-package main
+package knuckles
 
 import (
   "github.com/fiorix/go-redis/redis"
-  "github.com/uken/knuckles"
   "testing"
 )
 
@@ -16,7 +15,7 @@ func redisClear() {
 
 func Test_StoreBasic(t *testing.T) {
   redisClear()
-  r, err := knuckles.NewRedisStore(namespace, addr)
+  r, err := NewRedisStore(namespace, addr)
 
   if err != nil {
     t.Fatal(err)
@@ -31,7 +30,7 @@ func Test_StoreBasic(t *testing.T) {
 
 func Test_StoreHostname(t *testing.T) {
   redisClear()
-  r, err := knuckles.NewRedisStore(namespace, addr)
+  r, err := NewRedisStore(namespace, addr)
 
   if err != nil {
     t.Fatal(err)
@@ -51,14 +50,14 @@ func Test_StoreHostname(t *testing.T) {
 
   err = r.AddHostname("testapp", "something.com")
 
-  if err != knuckles.ErrHostnameAlreadyExists {
+  if err != ErrHostnameAlreadyExists {
     t.Fatal("Duplicated hostname")
   }
 }
 
 func Test_StoreBackend(t *testing.T) {
   redisClear()
-  r, err := knuckles.NewRedisStore(namespace, addr)
+  r, err := NewRedisStore(namespace, addr)
 
   if err != nil {
     t.Fatal(err)
