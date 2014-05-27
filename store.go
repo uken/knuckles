@@ -136,10 +136,18 @@ func (r *RedisStore) AddBackend(app, backend string, ttl int) error {
     return ErrBackendAlreadyExists
   }
 
-  err = r.client.SetEx(r.Key("backend_ttl:%s:%s", app, backend), ttl, "1")
+  err = r.client.Set(r.Key("backend_ttl:%s:%s", app, backend), "1")
 
   if err != nil {
     return err
+  }
+
+  if ttl > 0 {
+    _, err = r.client.Expire(r.Key("backend_ttl:%s:%s", app, backend), ttl)
+
+    if err != nil {
+      return err
+    }
   }
 
   _, err = r.client.SAdd(r.Key("backend:%s", app), backend)
