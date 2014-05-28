@@ -12,7 +12,7 @@ Configuration is stored on `redis`, having no downtime during reconfiguration.
 ## Usage
 
     go get -u github.com/uken/knuckles/knuckles
-    ./knuckles -config path_to_knuckles_config.conf
+    knuckles -config path_to_knuckles_config.conf
 
 Check this [config sample](knuckles/knuckles.sample.conf)
 
@@ -44,10 +44,20 @@ Assuming you've setup API on port 8082:
     # Removing backends
     curl localhost:8082/api -d action=del-backend -d application=google -d backend=google.com:80
 
-Please note that `add-backend` takes an extra parameter `ttl`, which dictates for how long the backend should be considered alive. 
+Please note that `add-backend` takes an extra parameter `ttl` which dictates for how long the backend should be kept in the config. 
 This allows services to register and send constant keep-alives.
 
 Sending `ttl=0` disables ttl checking for a specific backend.
+
+The pseudo-data model is:
+
+                            / -> Many Hostnames
+            /->  Application
+           /                \ -> Many Backends
+    knuckles
+           \                / -> Many Hostnames
+            \->  Application
+                            \ -> Many Backends
 
 ## Deployment Considerations
 
@@ -85,3 +95,8 @@ the deployment guideline is:
                            |  knuckles  |
                            +------------+
                             [API Access]
+
+### Missing functionality
+- Catch-all domains. Can be implemented as a special hostname.
+- SSL. Offloading to nginx at the moment. SNI should also be considered.
+- Logging.
