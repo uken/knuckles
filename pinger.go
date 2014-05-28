@@ -3,6 +3,7 @@ package knuckles
 import (
   "fmt"
   "log"
+  "net"
   "net/http"
   "time"
 )
@@ -125,7 +126,9 @@ func (pinger *Pinger) Stop() error {
 // We don't care if it returns 2xx,3xx,4xx,5xx
 // as long as it is alive
 func checkEndpoint(endpoint string) bool {
-  tr := &http.Transport{}
+  tr := &http.Transport{
+    Dial: dialTimeout,
+  }
 
   req, _ := http.NewRequest("GET", fmt.Sprintf("http://%s", endpoint), nil)
   req.Close = true
@@ -140,4 +143,9 @@ func checkEndpoint(endpoint string) bool {
   }
 
   return true
+}
+
+func dialTimeout(network, addr string) (net.Conn, error) {
+  timeout := time.Duration(2 * time.Second)
+  return net.DialTimeout(network, addr, timeout)
 }
