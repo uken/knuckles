@@ -3,7 +3,6 @@ package knuckles
 import (
   "fmt"
   "io"
-  "log"
   "net"
   "net/http"
   "net/url"
@@ -58,7 +57,6 @@ func (h *HTTPProxy) Stop() error {
 
 func (h *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
   hostname := r.Host
-  log.Println("Request for", hostname)
 
   if sep := strings.Index(hostname, ":"); sep >= 0 {
     hostname = hostname[:sep]
