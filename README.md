@@ -1,5 +1,7 @@
 _Guarding our Chaos Emeralds_
 
+[![Build Status](https://travis-ci.org/uken/knuckles.svg?branch=master)](https://travis-ci.org/uken/knuckles)
+
 ## Overview
 
 Provides hostname-based load balancing for HTTP and WebSocket requests.
