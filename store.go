@@ -3,6 +3,8 @@ package knuckles
 import (
   "fmt"
   "github.com/fiorix/go-redis/redis"
+  "strconv"
+  "time"
 )
 
 type Endpoint struct {
@@ -67,20 +69,7 @@ func (r *RedisStore) EndpointForHostname(name string) (Endpoint, error) {
     return epoint, ErrNoBackend
   }
 
-  backend := members[0]
-
-  //check if ttl is still valid
-  exists, err := r.client.Exists(r.Key("backend_ttl:%s:%s", appName, backend))
-
-  if err != nil {
-    return epoint, err
-  }
-
-  if !exists {
-    return epoint, ErrDeadBackend
-  }
-
-  epoint.addr = backend
+  epoint.addr = members[0]
 
   return epoint, nil
 }
@@ -124,6 +113,30 @@ func (r *RedisStore) isValidBackend(app, backend string) error {
     return ErrNoBackend
   }
 
+  // check if this guy needs to be removed (ttl)
+  rawTTL, err := r.client.Get(r.Key("backend_ttl:%s:%s", app, backend))
+  if err != nil {
+    return err
+  }
+
+  // if the backend has been dead for more than X seconds
+  // and it hasn't pinged us, get rid of it
+  if rawTTL != "" {
+    now := int(time.Now().Unix())
+    ttl, err := strconv.Atoi(rawTTL)
+    if err == nil {
+      if now > ttl {
+        err = r.RemoveBackend(app, backend)
+
+        if err != nil {
+          return err
+        }
+        //make sure this backend doesn't get activated
+        return ErrNoBackend
+      }
+    }
+  }
+
   return nil
 }
 
@@ -135,11 +148,6 @@ func (r *RedisStore) EnableBackend(app, backend string) error {
 
   err = r.isValidBackend(app, backend)
   if err != nil {
-    // it is being catched via pinger service
-    // there is a race condition there
-    if err == ErrNoBackend {
-      r.DisableBackend(app, backend)
-    }
     return err
   }
 
@@ -150,6 +158,11 @@ func (r *RedisStore) EnableBackend(app, backend string) error {
 
 func (r *RedisStore) DisableBackend(app, backend string) error {
   err := r.isValidApp(app)
+  if err != nil {
+    return err
+  }
+
+  err = r.isValidBackend(app, backend)
   if err != nil {
     return err
   }
@@ -196,14 +209,9 @@ func (r *RedisStore) AddBackend(app, backend string, ttl int) error {
     return ErrBackendAlreadyExists
   }
 
-  err = r.client.Set(r.Key("backend_ttl:%s:%s", app, backend), "1")
-
-  if err != nil {
-    return err
-  }
-
   if ttl > 0 {
-    _, err = r.client.Expire(r.Key("backend_ttl:%s:%s", app, backend), ttl)
+    expire := int(time.Now().Unix()) + ttl
+    err = r.client.Set(r.Key("backend_ttl:%s:%s", app, backend), strconv.Itoa(expire))
 
     if err != nil {
       return err
@@ -228,6 +236,11 @@ func (r *RedisStore) BackendsForApp(app string) ([]string, error) {
 
 func (r *RedisStore) RemoveBackend(app, backend string) error {
   err := r.isValidApp(app)
+  if err != nil {
+    return err
+  }
+
+  _, err = r.client.Del(r.Key("backend_ttl:%s:%s", app, backend))
   if err != nil {
     return err
   }
